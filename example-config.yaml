@@ -1,0 +1,126 @@
+# MCP Sentinel Configuration
+debug: false
+log-level: info
+
+# OpenAI Configuration
+# openai-api-key: sk-... # Can also be set via OPENAI_API_KEY environment variable
+openai-model: gpt-4o
+# openai-url: https://api.openai.com/v1 # Optional, for custom endpoints
+default-max-iterations: 10 # Global default for LLM conversation iterations
+
+# Resources - Single source of truth
+resources:
+  - name: critical-cpu-alerts
+    type: prometheus_alert
+    filters:
+      alertname: "HighCPUUsage"
+      severity: "critical"
+
+  - name: memory-warnings
+    type: prometheus_alert
+    filters:
+      alertname: "HighMemoryUsage"
+      severity: "warning"
+
+  - name: disk-alerts
+    type: prometheus_alert
+    filters:
+      alertname: ["DiskSpaceLow", "DiskInodeUsage"]
+
+# Watchers - Produce notifications for specific resources
+watchers:
+  - type: prometheus
+    name: main-prometheus
+    endpoint: "http://localhost:9090"
+    poll-interval: "30s"
+    resources:
+      - critical-cpu-alerts
+      - memory-warnings
+      - disk-alerts
+
+# MCP Servers - External services for incident response
+mcp-servers:
+  - name: mcp-ceph
+    type: stdio
+    command: "npx"
+    args: ["@modelcontextprotocol/server-filesystem", "/opt/ceph"]
+    work-dir: "/tmp"
+    timeout: "30s"
+    auto-start: true
+    tools:
+      - ceph-status
+      - pg-dump
+      - osd-status
+
+  - name: mcp-juju
+    type: stdio
+    command: "juju-mcp-server"
+    args: ["--model", "production"]
+    timeout: "60s"
+    auto-start: true
+    tools:
+      - juju-status
+      - unit-logs
+      - run-action
+
+  - name: mcp-grafana
+    type: streamable
+    url: "http://grafana.local:3000/mcp"
+    timeout: "10s"
+    auto-start: false
+    tools:
+      - create-dashboard
+      - export-metrics
+
+# Incident Cards - Listen to specific resources
+incident-cards:
+  - name: critical-response
+    resource: critical-cpu-alerts
+    prompt: |
+      CRITICAL CPU ALERT:
+      Alert: {{.Name}}
+      Instance: {{.Labels.instance}}
+      Value: {{.Value}}
+
+      IMMEDIATE ACTION REQUIRED!
+
+      Available MCP Tools:
+      - mcp-juju.juju-status: Check application status
+      - mcp-grafana.create-dashboard: Create monitoring dashboard
+    tools:
+      - mcp-juju.juju-status
+      - mcp-grafana.create-dashboard
+    max-iterations: 15 # Allow more iterations for critical incidents
+
+  - name: memory-monitor
+    resource: memory-warnings
+    prompt: |
+      MEMORY WARNING:
+      Alert: {{.Name}}
+      Instance: {{.Labels.instance}}
+      Current Usage: {{.Value}}
+
+      Please investigate memory usage.
+
+      Available MCP Tools:
+      - mcp-juju.unit-logs: Get unit logs for analysis
+      - mcp-grafana.export-metrics: Export memory metrics
+    tools:
+      - mcp-juju.unit-logs
+      - mcp-grafana.export-metrics
+
+  - name: disk-maintenance
+    resource: disk-alerts
+    prompt: |
+      DISK SPACE ALERT:
+      Alert: {{.Name}}
+      Instance: {{.Labels.instance}}
+
+      Disk maintenance required.
+
+      Available MCP Tools:
+      - mcp-ceph.ceph-status: Check Ceph cluster status
+      - mcp-juju.run-action: Run cleanup actions
+    tools:
+      - mcp-ceph.ceph-status
+      - mcp-juju.run-action

@@ -3,8 +3,9 @@ module github.com/jneo8/mcp-sentinel/mcp-sentinel
 go 1.24.2
 
 require (
-	github.com/mark3labs/mcp-go v0.40.0
-	github.com/openai/openai-go/v2 v2.6.0
+	github.com/mark3labs/mcp-go v0.41.0
+	github.com/openai/openai-go/v2 v2.7.0
+	github.com/rs/zerolog v1.34.0
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/viper v1.21.0
 )
@@ -18,6 +19,8 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
