@@ -1,237 +1,93 @@
-# MCP Sentinel Architecture Specification v0.2
+# MCP Sentinel Architecture Specification v0.3
 
 ## Overview
+MCP Sentinel transforms raw alerts into validated incident packages by combining watcher-driven intake, an agent-based orchestration core, and Model Context Protocol (MCP) tool integrations. The system runs each incident through a dedicated agent session that gathers context, enforces deterministic safety checks, and emits audit-ready outputs for human responders.
 
-MCP Sentinel is an intelligent incident response system that monitors Prometheus alerts and responds through AI-driven analysis using Model Context Protocol (MCP) tools. The system combines real-time monitoring, resource-centric configuration, and LLM-powered decision making to provide automated incident investigation and response.
+## Architecture Layers
+| Layer | Responsibility | Key Technologies |
+| ----- | -------------- | ---------------- |
+| Watchers | Monitor external systems, filter alerts, emit `IncidentNotification` objects | Prometheus/Grafana integrations, goroutines, backpressure-aware channels |
+| Dispatcher | Map notifications to incident cards, spin up agent sessions, enforce routing policies | Worker queue, config-driven matching |
+| Sentinel Agent | Coordinate MCP tools, apply prompts, maintain conversation state, stream events | `openai-agents` runtime, `AgentSession`, shared memory |
+| Tool Adapters | Provide typed, read-only access to MCP servers and deterministic checks | `@tool`-annotated wrappers, Pydantic models, retries/circuit breakers |
+| Safety Hooks | Run pre/post validations, ensure checklist completion before human handoff | Rules engine callbacks, policy evaluation |
+| Sinks & Audit | Deliver outputs to Slack/Matrix/Jira/email and persist transcripts for audit | Streaming event handlers, durable storage |
 
-## System Architecture
-
-### Core Components
-
+## Component Interaction
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Watchers      │    │    Sentinel     │    │  MCP Servers    │
-│                 │    │                 │    │                 │
-│ - Prometheus    │───▶│ - Notification  │───▶│ - Grafana       │
-│ - (Future)      │    │   Processing    │    │ - Ceph          │
-│                 │    │ - LLM Analysis  │    │ - (...)         │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                │
-                                ▼
-                       ┌─────────────────┐
-                       │   OpenAI LLM    │
-                       │                 │
-                       │ - Function      │
-                       │   Calling       │
-                       │ - Continuous    │
-                       │   Conversation  │
-                       └─────────────────┘
+┌──────────────┐   notifications   ┌──────────────┐   agent events   ┌──────────────┐
+│   Watchers   │ ─────────────────▶│  Dispatcher  │──────────────────▶│ Sentinel Agent│
+└──────────────┘                   └──────┬──────┘                   └──────┬───────┘
+                                          │                             tool calls
+                                          │                                 │
+                                          ▼                                 ▼
+                                   ┌──────────────┐                 ┌──────────────┐
+                                   │  Audit/Sinks │◀─────────────── │  MCP Servers │
+                                   └──────────────┘    results      └──────────────┘
 ```
 
-### Component Architecture
+## Agent Integration Blueprint
+- **Session management**: Each incident runs within `agent.session(metadata=...)`, giving resumable control, cancellation hooks, and bounded iterations.
+- **Typed tool surface**: MCP queries, enrichment fetches, and checklist validators are exposed with `@tool` annotations so the runtime auto-generates JSON schemas and validates arguments.
+- **Streaming runner**: `StreamingAgentRunner` feeds real-time `Item` events (messages, tool calls, logs) to sinks and to the dispatcher for monitoring SLA breaches or circuit breaker triggers.
+- **Scoped tool registry**: `SentinelAgentFactory` registers only the tools declared in the incident card, enforcing allowlists and read-only adapters.
+- **Memory & context**: Shared, per-incident memory keeps critical facts accessible across tool invocations while long-term history is captured in the audit store.
 
-**Watchers**
-- Monitor external systems (Prometheus alerts)
-- Apply resource-based filtering
-- Generate notifications for matched alerts
-- Run concurrently in separate goroutines
+## End-to-End Flow
+1. **Alert intake**: Watcher polls, filters by resource configuration, and emits an `IncidentNotification` with enriched labels/annotations.
+2. **Routing**: Dispatcher selects an `IncidentCardConfig`, derives sinks, prompts, and tool allowlists, then enqueues work.
+3. **Session bootstrap**: `SentinelAgentFactory.create()` initializes the agent, registers incident-scoped tools, and attaches safety hooks.
+4. **Streaming orchestration**:
+   - `on_start` events send an initial incident stub to sinks.
+   - Tool calls execute through MCP adapters with retries, timeouts, and circuit breakers.
+   - Intermediate reasoning is optionally forwarded to collaboration channels for transparency.
+5. **Safety validation**: Deterministic rules verify checklist items; failures short-circuit the session and escalate to humans with clear errors.
+6. **Emission & audit**: Final incident card, recommended actions, and checklist status are pushed to sinks while the complete transcript plus tool payloads land in the audit repository.
 
-**Sentinel**
-- Orchestrates incident response workflow
-- Maps notifications to incident cards by resource name
-- Manages LLM conversations with MCP tool integration
-- Coordinates between all system components
-
-**MCP Servers**
-- Provide investigation and remediation tools
-- Support STDIO and HTTP transport protocols
-- Expose tool schemas for LLM integration
-- Execute tool calls requested by LLM
-
-**LLM Integration**
-- Analyzes incident context using OpenAI models
-- Uses function calling to select appropriate MCP tools
-- Maintains conversation state across multiple tool executions
-- Provides final analysis and recommendations
-
-## Data Flow Architecture
-
-### Primary Data Flow
-
-```
-Alert Source → Watcher → Notification → Sentinel → Incident Card → LLM Analysis → Tool Selection → MCP Tool Execution → Results → LLM Continuation → Final Response
-```
-
-### Detailed Flow Steps
-
-1. **Alert Detection**
-   - Watchers poll external systems (Prometheus)
-   - Raw alerts are received from monitoring endpoints
-
-2. **Resource Filtering**
-   - Alerts are matched against configured resources
-   - Resource filters determine relevance
-   - Only matching alerts proceed to notification
-
-3. **Notification Generation**
-   - Matched alerts create notification objects
-   - Notifications contain resource metadata and alert details
-   - Sent via buffered channel to Sentinel
-
-4. **Incident Card Mapping**
-   - Sentinel maps notifications to incident cards by resource name
-   - Each incident card defines response procedures and available tools
-   - Unmapped notifications are logged and discarded
-
-5. **LLM Tool Discovery**
-   - Sentinel discovers available MCP tools from configured servers
-   - Tool schemas are retrieved using MCP `ListTools` requests
-   - OpenAI function definitions are generated from tool schemas
-
-6. **LLM Conversation Initiation**
-   - System prompt includes incident details and available tools
-   - Initial conversation context is established
-   - LLM receives incident card prompt and resource information
-
-7. **Tool Selection and Execution**
-   - LLM uses OpenAI function calling to select tools
-   - Function call arguments are generated by LLM
-   - MCP `CallTool` requests execute selected tools
-   - Tool results are captured and formatted
-
-8. **Conversation Continuation**
-   - Tool results are fed back to LLM as function messages
-   - LLM analyzes results and decides next actions
-   - Process iterates until LLM provides final analysis
-   - Maximum iterations prevent infinite loops
-
-## Configuration Architecture
-
-### Resource-Centric Design
-
-Resources serve as the single source of truth for monitoring configuration:
-
-```
-Resources → Referenced by Watchers (what to monitor)
-         → Referenced by Incident Cards (what to respond to)
-```
-
-### Configuration Hierarchy
-
+## Configuration Model
 ```yaml
-# System Configuration
-debug: boolean
-log-level: string
-openai-model: string
-default-max-iterations: integer
-
-# Monitoring Configuration
-resources:
-  - name: string (unique identifier)
-    type: string (alert type)
-    filters: map (matching criteria)
-
+sentinel:
+  openai:
+    model: gpt-4.1-mini
+    temperature: 0.2
+  defaults:
+    max_iterations: 6
+    retry_policy: { attempts: 2, backoff: exponential }
 watchers:
-  - type: string (watcher implementation)
-    resources: []string (resource references)
-    endpoint: string
-    poll-interval: duration
-
-# Response Configuration
-mcp-servers:
-  - name: string (unique identifier)
-    type: string (stdio|streamable)
-    command: string (for stdio)
-    url: string (for HTTP)
-    auto-start: boolean
-
-incident-cards:
-  - name: string
-    resource: string (resource reference)
-    prompt: string (LLM context)
-    tools: []string (server.tool format)
-    max-iterations: integer (optional override)
+  - type: prometheus
+    endpoint: https://prom.example/api/v1
+    poll_interval: 15s
+    resources: [db-primary, web-tier]
+mcp_servers:
+  - name: grafana
+    transport: http
+    url: http://grafana-proxy
+    enforce_read_only: true
+incident_cards:
+  - name: high-latency
+    resource: web-tier
+    prompt_template: prompts/high-latency.md
+    tools: [grafana.snapshot, prom.range_query, rules.check_slo]
+    sinks: [slack:oncall-web]
+    max_iterations: 4
 ```
+Configuration loads through layered settings (`SentinelSettings`, `WatcherConfig`, `IncidentCardConfig`) backed by Pydantic, enabling `.env` overrides and dry-run execution.
 
-## Communication Patterns
+## Operational Concerns
+- **Resilience**: Circuit breakers around MCP calls, bounded queues between watchers and dispatcher, and timeouts on agent sessions prevent cascading failures.
+- **Scalability**: Watchers run as independent goroutines; dispatcher/agent workers scale horizontally to process concurrent incidents.
+- **Observability**: Metrics export latency per tool call, iteration counts, alert-to-notification lag, and sink delivery status. Structured logs capture every agent event with correlation IDs.
+- **Incident replay**: Dry-run mode replays historical alerts through the agent without contacting live MCP servers, supporting validation and tabletop exercises.
 
-### Inter-Component Communication
+## Implementation Milestones
+1. **Agent foundation**: Build `SentinelAgent`, shared memory, and factory; wire streaming runner into dispatcher.
+2. **Tool registry**: Wrap MCP clients and safety rules with typed `@tool` functions; add allowlist enforcement and retries.
+3. **Session orchestration**: Implement event handlers for sinks, safety hooks, and iteration limits; ensure graceful cancellation.
+4. **Resilience & observability**: Introduce circuit breakers, metrics, and alerting on session failures or tool degradation.
+5. **Validation**: Unit tests for tool schemas/config parsing and integration tests covering watcher→agent→sink flow.
 
-**Watcher → Sentinel**
-- Asynchronous via buffered notification channel
-- Non-blocking for watcher goroutines
-- Notifications contain full resource and alert context
-
-**Sentinel → MCP Servers**
-- Synchronous MCP protocol calls
-- Tool discovery via `ListTools` requests
-- Tool execution via `CallTool` requests
-- Connection management and lifecycle
-
-**Sentinel → LLM**
-- HTTP API calls to OpenAI-compatible endpoints
-- Function calling protocol for tool selection
-- Conversation state maintained in message history
-- Configurable models and parameters
-
-### Data Structures
-
-**Notification**
-```
-Resource: {
-  Name, Type, State, Value, Timestamp
-  Labels: map[string]string
-  Annotations: map[string]string
-}
-```
-
-**Incident Card**
-```
-Resource: Resource reference
-Prompt: string (LLM context)
-Tools: []McpTool {ServerName, ToolName}
-MaxIterations: integer
-```
-
-**MCP Tool Call**
-```
-ServerName: string
-ToolName: string
-Arguments: map[string]any (LLM-generated)
-```
-
-## Concurrent Processing
-
-### Parallel Monitoring
-- Multiple watchers run independently to monitor different systems
-- Each watcher operates on its own polling schedule
-- Watchers are decoupled from incident processing for scalability
-
-### Asynchronous Communication
-- Watchers communicate with Sentinel via buffered notification channel
-- Non-blocking notification delivery prevents monitoring delays
-- Sequential incident processing maintains conversation context
-
-## LLM Integration Architecture
-
-### Conversation Flow
-
-```
-System Prompt → Initial Analysis → Function Call → Tool Execution → Result Integration → Continued Analysis → Final Response
-```
-
-### Function Calling Protocol
-
-1. **Schema Discovery**: MCP tool schemas converted to OpenAI function definitions
-2. **Function Registration**: Available tools registered with LLM context
-3. **Function Invocation**: LLM generates function calls with arguments
-4. **Execution Mapping**: Function calls mapped to MCP tool executions
-5. **Result Integration**: Tool results formatted as function messages
-6. **Iteration Control**: Process continues until completion or max iterations
-
-### State Management
-
-- Full conversation history maintained in message array
-- Function call results preserve execution context
-- Iteration counting prevents infinite loops
-- Error states communicated back to LLM for recovery
+## Security & Compliance Posture
+- MCP adapters default to read-only; no automated remediation is executed.
+- Secrets stay in environment-backed stores; redaction occurs before streaming events reach sinks.
+- Audit trail stores hashed transcripts per incident for tamper detection and compliance reporting.
+- Manual override (`sentinelctl abort <incident_id>`) terminates runaway sessions safely.
