@@ -1,0 +1,33 @@
+# Python caches and artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+.env
+.env.*
+
+# Packaging outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE/editor junk
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# UV + lock artifacts
+uv.lock.bak
