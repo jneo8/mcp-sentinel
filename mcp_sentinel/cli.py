@@ -13,6 +13,7 @@ from loguru import logger
 from .agent import OpenAIAgentOrchestrator
 from .config import ConfigurationError, load_settings
 from .dispatcher import PrometheusDispatcher
+from .watchers import PrometheusWatcherService
 from .models import SentinelSettings
 
 
@@ -61,32 +62,25 @@ def cli(ctx: click.Context, config_path: Path, log_level: str, debug: bool) -> N
 
 
 @cli.command(help="Start the Prometheus dispatcher loop.")
-@click.option(
-    "--run-once",
-    is_flag=True,
-    default=False,
-    help="Initialise components and exit without entering the long-running loop.",
-)
 @click.pass_context
-def run(ctx: click.Context, run_once: bool) -> None:
+def run(ctx: click.Context) -> None:
     settings = ctx.obj.get("settings")
     if settings is None:
         raise click.ClickException("Sentinel settings not initialised; invoke via the top-level CLI")
 
     assert isinstance(settings, SentinelSettings)
-    asyncio.run(_run_dispatcher(settings, run_once=run_once))
+    asyncio.run(_run_dispatcher(settings))
 
 
-async def _run_dispatcher(settings: SentinelSettings, *, run_once: bool) -> None:
+async def _run_dispatcher(settings: SentinelSettings) -> None:
     orchestrator = OpenAIAgentOrchestrator(settings)
     dispatcher = PrometheusDispatcher(settings=settings, agent_orchestrator=orchestrator)
+    watcher_service = PrometheusWatcherService(settings=settings, dispatcher=dispatcher)
     started = False
     try:
         await dispatcher.start()
         started = True
-        if run_once:
-            logger.info("Run-once mode enabled; dispatcher started and will now stop")
-            return
+        await watcher_service.start()
 
         logger.info("Prometheus dispatcher running; awaiting watcher notifications")
         while True:
@@ -96,6 +90,7 @@ async def _run_dispatcher(settings: SentinelSettings, *, run_once: bool) -> None
     except KeyboardInterrupt:
         logger.info("Shutdown signal received; stopping dispatcher")
     finally:
+        await watcher_service.stop()
         if started:
             await dispatcher.stop()
 

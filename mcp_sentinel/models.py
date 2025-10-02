@@ -4,7 +4,45 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+
+def _parse_duration_seconds(value: Any, *, field: str) -> int:
+    """Convert human-friendly duration strings (e.g. ``"5s"`` or ``"1m"``) to seconds."""
+
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    elif isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            raise ValueError(f"{field} cannot be empty")
+
+        multiplier = 1.0
+        if text.endswith("ms"):
+            multiplier = 0.001
+            text = text[:-2]
+        elif text[-1] in {"s", "m", "h"}:
+            unit = text[-1]
+            text = text[:-1]
+            multiplier = {"s": 1.0, "m": 60.0, "h": 3600.0}[unit]
+
+        try:
+            seconds = float(text) * multiplier
+        except ValueError as exc:  # pragma: no cover - defensive guard
+            raise ValueError(f"Invalid duration for {field}: {value}") from exc
+    else:  # pragma: no cover - defensive guard for unsupported types
+        raise TypeError(f"Unsupported type for {field}: {type(value)!r}")
+
+    if seconds <= 0:
+        raise ValueError(f"{field} must be positive")
+    return int(max(1, round(seconds)))
 
 
 class Resource(BaseModel):
@@ -196,6 +234,74 @@ class HostedMCPServer(BaseModel):
         return config
 
 
+class ResourceDefinition(BaseModel):
+    """Declarative selector describing how to recognise a resource from watcher data."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., description="Logical resource identifier used throughout Sentinel")
+    type: str = Field(
+        default="prometheus_alert",
+        validation_alias=AliasChoices("type", "resource_type", "resource-type"),
+    )
+    filters: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Label filters that must match for an alert to map to this resource",
+        validation_alias=AliasChoices("filters", "labels", "selectors"),
+    )
+    annotations: Dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("annotations", "default_annotations", "default-annotations"),
+    )
+
+
+class PrometheusWatcherSettings(BaseModel):
+    """Configuration for a Prometheus watcher polling alert endpoints."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: Literal["prometheus"] = Field(
+        default="prometheus",
+        validation_alias=AliasChoices("type", "watcher_type", "watcher-type"),
+    )
+    name: str = Field(..., description="Human-friendly watcher identifier")
+    endpoint: str = Field(
+        ...,
+        description="Base URL for the Prometheus API (e.g. https://prom/api/v1)",
+        validation_alias=AliasChoices("endpoint", "url", "base_url", "base-url"),
+    )
+    poll_interval_seconds: int = Field(
+        default=15,
+        ge=1,
+        validation_alias=AliasChoices(
+            "poll_interval_seconds",
+            "poll-interval-seconds",
+            "poll_interval",
+            "poll-interval",
+        ),
+    )
+    timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices("timeout_seconds", "timeout", "request-timeout"),
+    )
+    resources: List[str] = Field(
+        default_factory=list,
+        description="Resource definitions this watcher should emit",
+        validation_alias=AliasChoices("resources", "resource-list"),
+    )
+
+    @field_validator("poll_interval_seconds", mode="before")
+    @classmethod
+    def _parse_poll_interval(cls, value: Any) -> int:
+        return _parse_duration_seconds(value, field="poll_interval")
+
+    @field_validator("timeout_seconds", mode="before")
+    @classmethod
+    def _parse_timeout(cls, value: Any) -> int:
+        return _parse_duration_seconds(value, field="timeout")
+
+
 class SentinelSettings(BaseModel):
     """Top-level application settings used by the dispatcher."""
 
@@ -217,6 +323,22 @@ class SentinelSettings(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices(
             "mcp_servers", "mcp-servers", "hosted_mcp_servers", "hosted-mcp-servers"
+        ),
+    )
+    resources: List[ResourceDefinition] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "resources",
+            "resource_definitions",
+            "resource-definitions",
+        ),
+    )
+    watchers: List[PrometheusWatcherSettings] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "watchers",
+            "prometheus_watchers",
+            "prometheus-watchers",
         ),
     )
 

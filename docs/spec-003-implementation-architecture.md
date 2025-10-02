@@ -28,10 +28,10 @@ mcp_sentinel/
 └── services/
     └── registry.py          # Hosted MCP tool registry & resolver
 ```
-Tests reside in `tests/` and shadow the runtime namespaces. Watchers and sink pipelines are still pending implementations aligned with `spec-002`.
+Tests reside in `tests/` and shadow the runtime namespaces. Prometheus watchers are implemented; additional watcher drivers and sink pipelines remain aligned with `spec-002`.
 
 ## Alignment With Spec-002 Layers
-- **Watchers**: Prometheus/Grafana watchers are still pending. The dispatcher exposes an async `dispatch` API intended for whichever watcher implementation (`asyncio` tasks or background threads) we introduce. Spec-002's goroutine language is interpreted here as concurrent async tasks in Python.
+- **Watchers**: Prometheus polling is implemented by `watchers.PrometheusWatcherService`, which runs async tasks via httpx to translate alerts into dispatcher notifications. Grafana or additional watcher types remain future work, but the dispatcher contract is already exercised end-to-end.
 - **Dispatcher**: `mcp_sentinel.dispatcher.prometheus.PrometheusDispatcher` delivers the queue, dedupe TTL, and routing logic mandated by Spec-002. It currently logs drops and successes but does not yet publish metrics or feed sinks.
 - **Sentinel Agent**: `OpenAIAgentOrchestrator` wraps the `openai-agents` Runner. `ToolResolver` now delegates to `services.ToolRegistry`, which collapses incident card tool identifiers into `HostedMCPTool` instances with per-card allowlists.
 - **Tool Adapters & Safety Hooks**: Not yet implemented. The orchestrator logs a warning when tools are requested to make these gaps visible.
@@ -50,6 +50,8 @@ Tests reside in `tests/` and shadow the runtime namespaces. Watchers and sink pi
 - `dispatcher`: `PrometheusDispatcherSettings` capturing queue size, worker concurrency, and dedupe TTL.
 - `openai`: `OpenAISettings` for default model/temperature; additional OpenAI-specific parameters from Spec-002 can be added here.
 - `mcp_servers`: collection of `HostedMCPServer` entries that drive Hosted MCP tool resolution (labels, URLs, headers, approval policy).
+- `resources`: `ResourceDefinition` records describing how watchers recognise and enrich incidents.
+- `watchers`: `PrometheusWatcherSettings` entries that point to alert endpoints and the resources they should emit.
 
 `mcp_sentinel.config.load_settings` loads YAML files (default `config.yaml`) and validates them against `SentinelSettings`. Alias support allows `prompt`, `max-iterations`, `mcp-servers`, etc., to match Spec-002 examples.
 
@@ -60,7 +62,7 @@ Tests reside in `tests/` and shadow the runtime namespaces. Watchers and sink pi
 - Metrics exporters and structured audit sinks remain TODO items aligned with Spec-002's observability requirements.
 
 ## Open TODOs Relative to Spec-002
-- Implement Prometheus watcher ingestion layer (webhook, polling, or remote write) that pushes notifications into the dispatcher.
+- Add additional watcher drivers (Grafana webhooks, push gateways) and support remote-write ingestion.
 - Extend the tool registry with cached server discovery, approval callbacks, and richer error handling once MCP watchers land.
 - Add sink/audit pipeline to stream agent events to Slack/Jira/etc.
 - Introduce safety hooks and retries/backoff policies around agent runs.
@@ -68,6 +70,7 @@ Tests reside in `tests/` and shadow the runtime namespaces. Watchers and sink pi
 
 ## Testing Notes
 - `tests/dispatcher/test_prometheus_dispatcher.py` asserts queueing, dedupe, and worker behaviour with async fixtures.
+- `tests/watchers/test_prometheus_watcher.py` exercises the Prometheus polling service and dispatcher integration stubs.
 - `tests/prompts/test_prompts.py` covers prompt repository fallbacks and rendering context.
 - `tests/test_cli.py` validates CLI flag parsing and config loading.
 - Integration tests for watcher → dispatcher → agent flow and orchestrator error handling are pending until the missing layers land.
