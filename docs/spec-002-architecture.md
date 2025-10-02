@@ -1,4 +1,4 @@
-# MCP Sentinel Architecture Specification v0.3
+# MCP Sentinel Architecture Specification
 
 ## Overview
 MCP Sentinel transforms raw alerts into validated incident packages by combining watcher-driven intake, an agent-based orchestration core, and Model Context Protocol (MCP) tool integrations. The system runs each incident through a dedicated agent session that gathers context, enforces deterministic safety checks, and emits audit-ready outputs for human responders.
