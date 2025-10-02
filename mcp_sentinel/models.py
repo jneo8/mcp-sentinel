@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class Resource(BaseModel):
@@ -43,48 +43,101 @@ class IncidentNotification(BaseModel):
 class IncidentCard(BaseModel):
     """Configuration for how an incident should be handled."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str
     resource: str = Field(..., description="Resource name the card applies to")
-    prompt_template: str = Field(..., description="Path or identifier for prompt template")
+    prompt_template: str = Field(
+        ...,
+        description="Path or identifier for prompt template",
+        validation_alias=AliasChoices("prompt_template", "prompt", "prompt-template"),
+    )
     model: Optional[str] = Field(
-        default=None, description="Optional model override for this card"
+        default=None,
+        description="Optional model override for this card",
+        validation_alias=AliasChoices("model", "model-name"),
     )
     tools: List[str] = Field(
         default_factory=list,
         description="List of MCP tool identifiers in server.tool format",
+        validation_alias=AliasChoices("tools", "tool-list"),
     )
-    sinks: List[str] = Field(default_factory=list)
-    max_iterations: int = Field(default=6, ge=1, le=20)
+    sinks: List[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("sinks", "sink-list"),
+    )
+    max_iterations: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices("max_iterations", "max-iterations"),
+    )
 
 
 class DispatcherSettings(BaseModel):
     """Settings shared across dispatchers."""
 
-    queue_size: int = Field(default=100, ge=1, le=1000)
-    dedupe_ttl_seconds: int = Field(default=600, ge=10, le=3600)
+    model_config = ConfigDict(populate_by_name=True)
+
+    queue_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        validation_alias=AliasChoices("queue_size", "queue-size"),
+    )
+    dedupe_ttl_seconds: int = Field(
+        default=600,
+        ge=10,
+        le=3600,
+        validation_alias=AliasChoices("dedupe_ttl_seconds", "dedupe-ttl-seconds"),
+    )
 
 
 class PrometheusDispatcherSettings(DispatcherSettings):
     """Dispatcher-specific tuning flags."""
 
-    worker_concurrency: int = Field(default=4, ge=1, le=32)
+    worker_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        validation_alias=AliasChoices("worker_concurrency", "worker-concurrency"),
+    )
 
 
 class OpenAISettings(BaseModel):
     """Settings controlling how OpenAI models are invoked."""
 
-    model: str = Field(default="gpt-4.1-mini")
-    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    model_config = ConfigDict(populate_by_name=True)
+
+    model: str = Field(
+        default="gpt-4.1-mini",
+        validation_alias=AliasChoices("model", "model-name"),
+    )
+    temperature: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=2.0,
+        validation_alias=AliasChoices("temperature", "temp"),
+    )
 
 
 class SentinelSettings(BaseModel):
     """Top-level application settings used by the dispatcher."""
 
-    incident_cards: List[IncidentCard] = Field(default_factory=list)
-    dispatcher: PrometheusDispatcherSettings = Field(
-        default_factory=PrometheusDispatcherSettings
+    model_config = ConfigDict(populate_by_name=True)
+
+    incident_cards: List[IncidentCard] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("incident_cards", "incident-cards"),
     )
-    openai: OpenAISettings = Field(default_factory=OpenAISettings)
+    dispatcher: PrometheusDispatcherSettings = Field(
+        default_factory=PrometheusDispatcherSettings,
+        validation_alias=AliasChoices("dispatcher", "dispatcher"),
+    )
+    openai: OpenAISettings = Field(
+        default_factory=OpenAISettings,
+        validation_alias=AliasChoices("openai", "openai-settings"),
+    )
 
 
 class DispatcherResult(BaseModel):
@@ -93,10 +146,3 @@ class DispatcherResult(BaseModel):
     incident_card: Optional[IncidentCard] = None
     status: str = Field(..., description="Outcome status, e.g. routed, duplicate, dropped")
     detail: Optional[str] = None
-
-
-class OpenAISettings(BaseModel):
-    """Settings controlling how OpenAI models are invoked."""
-
-    model: str = Field(default="gpt-4.1-mini")
-    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
