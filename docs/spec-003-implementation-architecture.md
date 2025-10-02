@@ -19,19 +19,21 @@ mcp_sentinel/
 ├── cli.py                   # click commands (run, flags)
 ├── config.py                # YAML loader + configuration error types
 ├── interfaces.py            # Protocols for dispatcher/orchestrator contracts
-├── models.py                # Shared pydantic models (cards, notifications, settings)
+├── models.py                # Shared pydantic models (cards, notifications, servers)
 ├── prompts.py               # Prompt repository + renderer utilities
 ├── dispatcher/
 │   └── prometheus.py        # Async queue, dedupe cache, worker loop
-└── agent/
-    └── orchestrator.py      # openai-agents integration & prompt hydration
+├── agent/
+│   └── orchestrator.py      # openai-agents integration & prompt hydration
+└── services/
+    └── registry.py          # Hosted MCP tool registry & resolver
 ```
-Tests reside in `tests/` and shadow the runtime namespaces. Modules for watchers, sinks, and tool registries are not yet implemented; `spec-002` callouts for these remain open TODOs.
+Tests reside in `tests/` and shadow the runtime namespaces. Watchers and sink pipelines are still pending implementations aligned with `spec-002`.
 
 ## Alignment With Spec-002 Layers
 - **Watchers**: Prometheus/Grafana watchers are still pending. The dispatcher exposes an async `dispatch` API intended for whichever watcher implementation (`asyncio` tasks or background threads) we introduce. Spec-002's goroutine language is interpreted here as concurrent async tasks in Python.
 - **Dispatcher**: `mcp_sentinel.dispatcher.prometheus.PrometheusDispatcher` delivers the queue, dedupe TTL, and routing logic mandated by Spec-002. It currently logs drops and successes but does not yet publish metrics or feed sinks.
-- **Sentinel Agent**: `OpenAIAgentOrchestrator` wraps the `openai-agents` Runner. Tool resolution is stubbed (`ToolResolver.resolve`) pending Hosted MCP registry support, matching the "Scoped tool registry" requirement from Spec-002.
+- **Sentinel Agent**: `OpenAIAgentOrchestrator` wraps the `openai-agents` Runner. `ToolResolver` now delegates to `services.ToolRegistry`, which collapses incident card tool identifiers into `HostedMCPTool` instances with per-card allowlists.
 - **Tool Adapters & Safety Hooks**: Not yet implemented. The orchestrator logs a warning when tools are requested to make these gaps visible.
 - **Sinks & Audit**: No sinks have been wired; dispatcher/orchestrator log at INFO as a placeholder until streaming sink handlers are added per Spec-002.
 
@@ -47,8 +49,9 @@ Tests reside in `tests/` and shadow the runtime namespaces. Modules for watchers
 - `incident_cards`: list of `IncidentCard` objects keyed by `resource`. Cards declare prompt paths, optional `model` overrides, tool identifiers, sink identifiers, and `max_iterations`.
 - `dispatcher`: `PrometheusDispatcherSettings` capturing queue size, worker concurrency, and dedupe TTL.
 - `openai`: `OpenAISettings` for default model/temperature; additional OpenAI-specific parameters from Spec-002 can be added here.
+- `mcp_servers`: collection of `HostedMCPServer` entries that drive Hosted MCP tool resolution (labels, URLs, headers, approval policy).
 
-`mcp_sentinel.config.load_settings` loads YAML files (default `config.yaml`) and validates them against `SentinelSettings`. Alias support allows `prompt`, `max-iterations`, etc., to match Spec-002 examples.
+`mcp_sentinel.config.load_settings` loads YAML files (default `config.yaml`) and validates them against `SentinelSettings`. Alias support allows `prompt`, `max-iterations`, `mcp-servers`, etc., to match Spec-002 examples.
 
 ## Observability & Logging
 - `cli._configure_logging` initialises Loguru with configurable level and debug mode.
@@ -58,7 +61,7 @@ Tests reside in `tests/` and shadow the runtime namespaces. Modules for watchers
 
 ## Open TODOs Relative to Spec-002
 - Implement Prometheus watcher ingestion layer (webhook, polling, or remote write) that pushes notifications into the dispatcher.
-- Build Hosted MCP tool registry + resolver to replace the `ToolResolver` stub and honour card-defined tool allowlists.
+- Extend the tool registry with cached server discovery, approval callbacks, and richer error handling once MCP watchers land.
 - Add sink/audit pipeline to stream agent events to Slack/Jira/etc.
 - Introduce safety hooks and retries/backoff policies around agent runs.
 - Expose metrics (queue depth, latency) and incorporate signal handling for graceful shutdown.

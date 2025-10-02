@@ -5,7 +5,15 @@ from typing import Any, Dict, List
 import pytest
 
 from mcp_sentinel.agent.orchestrator import OpenAIAgentOrchestrator
-from mcp_sentinel.models import IncidentCard, IncidentNotification, Resource, SentinelSettings
+from agents.tool import HostedMCPTool
+
+from mcp_sentinel.models import (
+    HostedMCPServer,
+    IncidentCard,
+    IncidentNotification,
+    Resource,
+    SentinelSettings,
+)
 from mcp_sentinel.prompts import PromptRepository
 
 
@@ -57,3 +65,38 @@ async def test_agent_orchestrator_renders_prompt(tmp_path: Path) -> None:
     assert "Investigate web-tier state firing" in agent.instructions
     assert call["kwargs"]["max_turns"] == 3
     assert "Incident resource web-tier" in call["input"]
+
+
+@pytest.mark.asyncio
+async def test_agent_orchestrator_resolves_hosted_mcp_tools() -> None:
+    settings = SentinelSettings(
+        mcp_servers=[
+            HostedMCPServer(
+                name="mcp-juju",
+                server_url="https://mcp.juju.example",
+            )
+        ]
+    )
+    card = IncidentCard(
+        name="ceph-alert",
+        resource="ceph-pg",
+        prompt_template="Investigate",
+        tools=["mcp-juju.controllers", "mcp-juju.exec"],
+    )
+    notification = IncidentNotification(
+        resource=Resource(type="prometheus_alert", name="ceph-pg"),
+    )
+
+    runner = StubRunner()
+    orchestrator = OpenAIAgentOrchestrator(settings, runner=runner)
+
+    await orchestrator.run_incident(card, notification)
+
+    tool_list = runner.calls[0]["agent"].tools
+    assert tool_list, "Hosted MCP tool should be attached to agent"
+    assert len(tool_list) == 1
+    tool = tool_list[0]
+    assert isinstance(tool, HostedMCPTool)
+    assert tool.tool_config["server_label"] == "mcp-juju"
+    assert tool.tool_config["server_url"] == "https://mcp.juju.example"
+    assert tool.tool_config["allowed_tools"] == ["controllers", "exec"]

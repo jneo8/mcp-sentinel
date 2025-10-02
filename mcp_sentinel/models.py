@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 class Resource(BaseModel):
@@ -121,6 +121,81 @@ class OpenAISettings(BaseModel):
     )
 
 
+class HostedMCPServer(BaseModel):
+    """Configuration for a hosted MCP server exposed to agents."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., description="Unique identifier referenced by incident cards")
+    server_label: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("server_label", "server-label", "label"),
+        description="Label presented to the agent runtime; defaults to name",
+    )
+    server_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("server_url", "server-url", "url"),
+    )
+    connector_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("connector_id", "connector-id"),
+    )
+    authorization: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("authorization", "auth-token", "token"),
+    )
+    headers: Dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("headers", "http-headers"),
+    )
+    require_approval: Optional[Union[Literal["always", "never"], Dict[str, Any]]] = Field(
+        default=None,
+        validation_alias=AliasChoices("require_approval", "require-approval"),
+        description="Optional approval policy forwarded to HostedMCP tools",
+    )
+    description: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("description", "server-description"),
+    )
+    default_allowed_tools: Optional[List[str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("default_allowed_tools", "default-allowed-tools"),
+        description="Baseline allowlist applied when cards omit specific tools",
+    )
+
+    @model_validator(mode="after")
+    def _validate_endpoint(self) -> "HostedMCPServer":
+        if not self.server_url and not self.connector_id:
+            raise ValueError(
+                "Hosted MCP server requires either server_url or connector_id to be configured"
+            )
+        return self
+
+    def to_mcp_config(self, *, allowed_tools: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Build a Hosted MCP tool configuration dictionary."""
+
+        tool_allowlist = allowed_tools or self.default_allowed_tools
+        config: Dict[str, Any] = {
+            "server_label": self.server_label or self.name,
+            "type": "mcp",
+        }
+        if tool_allowlist:
+            config["allowed_tools"] = list(dict.fromkeys(tool_allowlist))
+        if self.server_url:
+            config["server_url"] = self.server_url
+        if self.connector_id:
+            config["connector_id"] = self.connector_id
+        if self.authorization:
+            config["authorization"] = self.authorization
+        if self.headers:
+            config["headers"] = dict(self.headers)
+        if self.require_approval:
+            config["require_approval"] = self.require_approval
+        if self.description:
+            config["server_description"] = self.description
+        return config
+
+
 class SentinelSettings(BaseModel):
     """Top-level application settings used by the dispatcher."""
 
@@ -137,6 +212,12 @@ class SentinelSettings(BaseModel):
     openai: OpenAISettings = Field(
         default_factory=OpenAISettings,
         validation_alias=AliasChoices("openai", "openai-settings"),
+    )
+    mcp_servers: List[HostedMCPServer] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "mcp_servers", "mcp-servers", "hosted_mcp_servers", "hosted-mcp-servers"
+        ),
     )
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from textwrap import shorten
 from typing import Any, Protocol, Sequence
 
@@ -16,6 +15,7 @@ from loguru import logger
 from ..interfaces import AgentOrchestrator
 from ..models import IncidentCard, IncidentNotification, SentinelSettings
 from ..prompts import PromptRenderer, PromptRepository
+from ..services import ToolRegistry
 
 
 class RunnerProtocol(Protocol):
@@ -37,17 +37,22 @@ class RunnerProtocol(Protocol):
         ...
 
 
-@dataclass
 class ToolResolver:
     """Best-effort resolver converting incident card tool identifiers to agent tools."""
 
+    def __init__(self, registry: ToolRegistry | None = None) -> None:
+        self._registry = registry
+
     def resolve(self, tool_identifiers: Sequence[str]) -> list[Tool]:
-        if tool_identifiers:
+        if not tool_identifiers:
+            return []
+        if not self._registry:
             logger.warning(
-                "Tool resolution not yet implemented; ignoring tool identifiers",
+                "Tool registry not configured; ignoring tool identifiers",
                 tools=list(tool_identifiers),
             )
-        return []
+            return []
+        return self._registry.resolve(tool_identifiers)
 
 
 class OpenAIAgentOrchestrator(AgentOrchestrator):
@@ -61,12 +66,14 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
         prompt_renderer: PromptRenderer | None = None,
         runner: RunnerProtocol | None = None,
         tool_resolver: ToolResolver | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self._settings = settings
         self._prompts = prompt_repository or PromptRepository()
         self._renderer = prompt_renderer or PromptRenderer()
         self._runner = runner or Runner
-        self._tool_resolver = tool_resolver or ToolResolver()
+        registry = tool_registry or ToolRegistry.from_settings(settings)
+        self._tool_resolver = tool_resolver or ToolResolver(registry)
 
     async def run_incident(
         self, card: IncidentCard, notification: IncidentNotification
