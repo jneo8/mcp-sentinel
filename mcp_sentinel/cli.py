@@ -22,7 +22,56 @@ def _configure_logging(level: str, debug: bool) -> None:
 
     logger.remove()
     effective_level = "DEBUG" if debug else level.upper()
-    logger.add(sys.stderr, level=effective_level, backtrace=debug, diagnose=debug)
+
+    # Custom format that includes structured data
+    if debug:
+        # In debug mode, show all structured data
+        format_string = (
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+            "<level>{message}</level>"
+            "{extra}\n"
+        )
+    else:
+        # In normal mode, use simpler format but still show extra data
+        format_string = (
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan> - "
+            "<level>{message}</level>"
+            "{extra}\n"
+        )
+
+    def format_extra(record):
+        """Format extra fields as a dict."""
+        extra_data = {}
+        for key, value in record["extra"].items():
+            if key not in ["name", "function", "line"]:  # Skip built-in fields
+                extra_data[key] = value
+
+        if extra_data:
+            import json
+            try:
+                # Use JSON for clean dict-like formatting
+                return " " + json.dumps(extra_data, default=str, ensure_ascii=False)
+            except Exception:
+                # Fallback to repr if JSON fails
+                return " " + repr(extra_data)
+        return ""
+
+    # Add the format_extra function to each record
+    def format_record(record):
+        record["extra_formatted"] = format_extra(record)
+        return format_string.replace("{extra}", "{extra_formatted}")
+
+    logger.add(
+        sys.stderr,
+        level=effective_level,
+        backtrace=debug,
+        diagnose=debug,
+        format=format_record
+    )
 
 
 @click.group()

@@ -65,50 +65,133 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
     async def run_incident(
         self, card: IncidentCard, notification: IncidentNotification
     ) -> None:
+        logger.debug(
+            "Starting incident response workflow",
+            card_name=card.name,
+            resource_name=notification.resource.name,
+            resource_type=notification.resource.type,
+            card_tools=card.tools,
+        )
+
         instructions = self._render_instructions(card, notification)
+        logger.debug(
+            "Rendered agent instructions",
+            card_name=card.name,
+            instructions_length=len(instructions),
+            instructions_preview=instructions[:200] + "..." if len(instructions) > 200 else instructions,
+        )
+
         self._sinks.emit(card.sinks, incident_start_event(card, notification))
+
+        logger.debug("Resolving MCP tools from card configuration", tools=card.tools)
         resolved_items = self._mcp_registry.resolve(card.tools)
 
         # Separate tools and MCP servers
         tools = []
         mcp_servers = []
+        logger.debug(
+            "Separating resolved items into tools and MCP servers",
+            total_resolved_items=len(resolved_items),
+        )
+
         for item in resolved_items:
             if hasattr(item, 'name') and hasattr(item, 'description'):  # Regular Tool
+                logger.debug(
+                    "Found regular tool in resolved items",
+                    tool_name=getattr(item, 'name', 'unknown'),
+                    tool_type=type(item).__name__,
+                    has_description=hasattr(item, 'description')
+                )
                 tools.append(item)
             else:  # MCPServer
+                logger.debug(
+                    "Found MCP server in resolved items",
+                    server_name=getattr(item, 'name', 'unknown'),
+                    server_type=type(item).__name__,
+                    server_url=getattr(getattr(item, 'params', None), 'url', 'unknown')
+                )
                 mcp_servers.append(item)
 
+        logger.debug(
+            "Tool/server separation completed",
+            regular_tool_count=len(tools),
+            mcp_server_count=len(mcp_servers),
+            mcp_server_names=[getattr(server, 'name', 'unknown') for server in mcp_servers],
+        )
+
         # Initialize MCP server connections
+        logger.debug("Starting MCP server connections", server_count=len(mcp_servers))
         for mcp_server in mcp_servers:
+            logger.debug(
+                "Attempting to connect to MCP server",
+                server_name=mcp_server.name,
+                server_url=getattr(mcp_server.params, 'url', 'unknown'),
+                server_timeout=getattr(mcp_server.params, 'timeout', 'unknown'),
+                cache_enabled=getattr(mcp_server, 'cache_tools_list', 'unknown'),
+            )
             try:
                 await mcp_server.connect()
                 logger.info(
                     "Connected to MCP server",
                     server_name=mcp_server.name,
                 )
+                logger.debug(
+                    "MCP server connection established successfully",
+                    server_name=mcp_server.name,
+                    server_url=getattr(mcp_server.params, 'url', 'unknown'),
+                    connection_status="connected",
+                )
             except Exception as exc:
                 logger.error(
                     "Failed to connect to MCP server",
                     server_name=mcp_server.name,
+                    server_url=getattr(mcp_server.params, 'url', 'unknown'),
                     error=str(exc),
+                    error_type=type(exc).__name__,
                 )
                 raise
 
+        agent_name = f"{card.name}-agent"
+        agent_model = card.model or self._settings.openai.model
+
+        logger.debug(
+            "Creating OpenAI agent",
+            agent_name=agent_name,
+            model=agent_model,
+            regular_tool_count=len(tools),
+            mcp_server_count=len(mcp_servers),
+            instructions_length=len(instructions),
+        )
+
         agent = Agent(
-            name=f"{card.name}-agent",
+            name=agent_name,
             instructions=instructions,
             tools=tools,
             mcp_servers=mcp_servers,
-            model=card.model or self._settings.openai.model,
+            model=agent_model,
         )
 
+        logger.debug("Agent created successfully", agent_name=agent_name)
+
         initial_input = self._build_initial_input(notification)
+        logger.debug(
+            "Built initial input for agent",
+            input_length=len(initial_input),
+            input_preview=initial_input[:200] + "..." if len(initial_input) > 200 else initial_input,
+        )
+
         run_config = RunConfig(
             workflow_name=f"incident::{card.name}",
             trace_metadata={
                 "resource": notification.resource.name,
                 "card": card.name,
             },
+        )
+
+        logger.debug(
+            "Created run configuration",
+            workflow_name=run_config.workflow_name,
+            trace_metadata=run_config.trace_metadata,
         )
 
         logger.info(
@@ -118,6 +201,13 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
             model=agent.model,
             initial_input=initial_input,
             instructions_preview=instructions[:200],
+            max_iterations=card.max_iterations,
+        )
+
+        logger.debug(
+            "Executing agent run",
+            max_turns=card.max_iterations,
+            workflow_name=run_config.workflow_name,
         )
 
         try:
@@ -127,7 +217,20 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
                 max_turns=card.max_iterations,
                 run_config=run_config,
             )
+            logger.debug(
+                "Agent run completed successfully",
+                card=card.name,
+                turn_count=getattr(result, 'turn_count', 'unknown'),
+                status=getattr(result, 'status', 'unknown'),
+                is_finished=getattr(result, 'is_finished', 'unknown'),
+            )
         except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Agent run failed with exception",
+                card=card.name,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
             self._emit_failure_event(card, notification, exc)
             logger.exception(
                 "Agent run failed",
@@ -137,20 +240,41 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
             )
             raise
 
+        logger.debug("Emitting success event and logging results")
         self._emit_success_event(card, notification, result)
         self._log_result(card, notification, result)
 
         # Clean up MCP server connections
+        logger.debug(
+            "Starting MCP server cleanup",
+            server_count=len(mcp_servers),
+            server_names=[mcp_server.name for mcp_server in mcp_servers]
+        )
         for mcp_server in mcp_servers:
+            logger.debug(
+                "Cleaning up MCP server connection",
+                server_name=mcp_server.name,
+                server_url=getattr(mcp_server.params, 'url', 'unknown'),
+                cleanup_action="calling_cleanup_method"
+            )
             try:
                 await mcp_server.cleanup()
-                logger.debug("Cleaned up MCP server", server_name=mcp_server.name)
+                logger.debug(
+                    "Successfully cleaned up MCP server",
+                    server_name=mcp_server.name,
+                    cleanup_status="success"
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to cleanup MCP server",
                     server_name=mcp_server.name,
+                    server_url=getattr(mcp_server.params, 'url', 'unknown'),
                     error=str(exc),
+                    error_type=type(exc).__name__,
+                    cleanup_status="failed"
                 )
+
+        logger.debug("Incident response workflow completed", card=card.name)
 
     def _render_instructions(
         self, card: IncidentCard, notification: IncidentNotification
