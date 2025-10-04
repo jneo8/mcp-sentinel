@@ -15,7 +15,7 @@ from loguru import logger
 from ..interfaces import AgentOrchestrator
 from ..models import IncidentCard, IncidentNotification, SentinelSettings
 from ..prompts import PromptRenderer, PromptRepository
-from ..services import ToolRegistry
+from ..mcp_integration import MCPServerRegistry
 from ..sinks import (
     SinkDispatcher,
     incident_completion_event,
@@ -42,30 +42,6 @@ class RunnerProtocol(Protocol):
         ...
 
 
-class ToolResolver:
-    """Best-effort resolver converting incident card tool identifiers to agent tools."""
-
-    def __init__(self, registry: ToolRegistry | None = None) -> None:
-        self._registry = registry
-
-    def resolve(self, tool_identifiers: Sequence[str]) -> list[Tool]:
-        if not tool_identifiers:
-            return []
-        if not self._registry:
-            logger.warning(
-                "Tool registry not configured; ignoring tool identifiers",
-                tools=list(tool_identifiers),
-            )
-            return []
-        resolved = self._registry.resolve(tool_identifiers)
-        if not resolved:
-            logger.warning(
-                "No tools resolved for incident card",
-                tools=list(tool_identifiers),
-            )
-        return resolved
-
-
 class OpenAIAgentOrchestrator(AgentOrchestrator):
     """Concrete orchestrator that delegates work to `openai-agents` Runner."""
 
@@ -76,16 +52,14 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
         prompt_repository: PromptRepository | None = None,
         prompt_renderer: PromptRenderer | None = None,
         runner: RunnerProtocol | None = None,
-        tool_resolver: ToolResolver | None = None,
-        tool_registry: ToolRegistry | None = None,
+        mcp_registry: MCPServerRegistry | None = None,
         sink_dispatcher: SinkDispatcher | None = None,
     ) -> None:
         self._settings = settings
         self._prompts = prompt_repository or PromptRepository()
         self._renderer = prompt_renderer or PromptRenderer()
         self._runner = runner or Runner
-        registry = tool_registry or ToolRegistry.from_settings(settings)
-        self._tool_resolver = tool_resolver or ToolResolver(registry)
+        self._mcp_registry = mcp_registry or MCPServerRegistry.from_settings(settings)
         self._sinks = sink_dispatcher or SinkDispatcher.from_settings(settings)
 
     async def run_incident(
@@ -93,7 +67,7 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
     ) -> None:
         instructions = self._render_instructions(card, notification)
         self._sinks.emit(card.sinks, incident_start_event(card, notification))
-        resolved_items = self._tool_resolver.resolve(card.tools)
+        resolved_items = self._mcp_registry.resolve(card.tools)
 
         # Separate tools and MCP servers
         tools = []

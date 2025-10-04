@@ -1,4 +1,4 @@
-"""Tool registry abstractions for resolving Hosted MCP integrations."""
+"""MCP server registry for managing MCP server connections and tool resolution."""
 
 from __future__ import annotations
 
@@ -50,8 +50,8 @@ def create_mcp_server(server_config: HostedMCPServer) -> MCPServerStreamableHttp
     return mcp_server
 
 
-class ToolRegistry:
-    """Resolves tool identifiers declared on incident cards into agent tool objects."""
+class MCPServerRegistry:
+    """Manages MCP server connections and resolves tool identifiers into MCP server instances."""
 
     def __init__(
         self,
@@ -67,7 +67,7 @@ class ToolRegistry:
         settings: "SentinelSettings",
         *,
         approval_callback: MCPToolApprovalFunction | None = None,
-    ) -> "ToolRegistry":
+    ) -> "MCPServerRegistry":
         """Convenience constructor feeding hosted MCP servers from settings."""
 
         return cls(
@@ -76,13 +76,19 @@ class ToolRegistry:
         )
 
     def resolve(self, tool_identifiers: Sequence[str]) -> List[Tool]:
-        """Return the list of tools applicable for the provided identifiers.
+        """Return the list of MCP servers applicable for the provided tool identifiers.
 
         Tool identifiers must use the ``server.tool`` format. Identifiers referencing unknown
         servers are ignored with a warning so that misconfigurations do not block other tools.
+
+        Includes warning logic previously in ToolResolver for better error handling.
         """
 
         if not tool_identifiers:
+            logger.warning(
+                "No tool identifiers provided to resolve",
+                tools=list(tool_identifiers),
+            )
             return []
 
         grouped: Dict[str, _GroupedTools] = defaultdict(lambda: _GroupedTools(set()))
@@ -132,6 +138,12 @@ class ToolRegistry:
             # Note: The Agent will need to be configured with mcp_servers instead of tools
             resolved.append(mcp_server)
 
+        if not resolved:
+            logger.warning(
+                "No MCP servers resolved from tool identifiers",
+                tools=list(tool_identifiers),
+            )
+
         return resolved
 
     def _derive_allowed_tools(
@@ -154,4 +166,4 @@ class ToolRegistry:
 
 
 
-__all__ = ["ToolRegistry"]
+__all__ = ["MCPServerRegistry"]
