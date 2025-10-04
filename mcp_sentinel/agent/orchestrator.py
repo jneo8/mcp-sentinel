@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from textwrap import shorten
-from typing import Any, Protocol, Sequence
+from typing import Any, List, Protocol, Sequence
 
 from agents import Agent, Runner
 from agents.result import RunResult
@@ -224,6 +224,11 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
                 status=getattr(result, 'status', 'unknown'),
                 is_finished=getattr(result, 'is_finished', 'unknown'),
             )
+
+            logger.debug("Emitting success event and logging results")
+            self._emit_success_event(card, notification, result)
+            self._log_result(card, notification, result)
+
         except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "Agent run failed with exception",
@@ -240,24 +245,48 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
             )
             raise
 
-        logger.debug("Emitting success event and logging results")
-        self._emit_success_event(card, notification, result)
-        self._log_result(card, notification, result)
+        finally:
+            # Clean up MCP server connections in finally block to ensure they're always cleaned up
+            logger.debug(
+                "Starting MCP server cleanup",
+                server_count=len(mcp_servers),
+                server_names=[mcp_server.name for mcp_server in mcp_servers]
+            )
+            await self._cleanup_mcp_servers(mcp_servers)
 
-        # Clean up MCP server connections
-        logger.debug(
-            "Starting MCP server cleanup",
-            server_count=len(mcp_servers),
-            server_names=[mcp_server.name for mcp_server in mcp_servers]
-        )
+        logger.debug("Incident response workflow completed", card=card.name)
+
+    async def _cleanup_mcp_servers(self, mcp_servers: List[Any]) -> None:
+        """Clean up MCP server connections, handling async generators properly."""
         for mcp_server in mcp_servers:
             logger.debug(
                 "Cleaning up MCP server connection",
                 server_name=mcp_server.name,
                 server_url=getattr(mcp_server.params, 'url', 'unknown'),
-                cleanup_action="calling_cleanup_method"
+                cleanup_action="starting_cleanup"
             )
             try:
+                # Try to close any HTTP client sessions first to avoid async generator issues
+                if hasattr(mcp_server, '_client') and mcp_server._client:
+                    if hasattr(mcp_server._client, 'aclose'):
+                        logger.debug(
+                            "Closing HTTP client session",
+                            server_name=mcp_server.name,
+                            cleanup_action="client_aclose"
+                        )
+                        await mcp_server._client.aclose()
+
+                # Try to close any async generators in the HTTP streamable client
+                if hasattr(mcp_server, '_http_client') and mcp_server._http_client:
+                    if hasattr(mcp_server._http_client, 'aclose'):
+                        logger.debug(
+                            "Closing HTTP streamable client",
+                            server_name=mcp_server.name,
+                            cleanup_action="http_client_aclose"
+                        )
+                        await mcp_server._http_client.aclose()
+
+                # Call the standard cleanup method
                 await mcp_server.cleanup()
                 logger.debug(
                     "Successfully cleaned up MCP server",
@@ -273,8 +302,6 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
                     error_type=type(exc).__name__,
                     cleanup_status="failed"
                 )
-
-        logger.debug("Incident response workflow completed", card=card.name)
 
     def _render_instructions(
         self, card: IncidentCard, notification: IncidentNotification
