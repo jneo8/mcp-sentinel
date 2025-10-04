@@ -209,23 +209,6 @@ class HostedMCPServer(BaseModel):
         default_factory=dict,
         validation_alias=AliasChoices("headers", "http-headers"),
     )
-    discovery_url: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("discovery_url", "discovery-url"),
-        description="Optional override for the tool discovery endpoint",
-    )
-    discovery_timeout_seconds: Optional[int] = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "discovery_timeout_seconds",
-            "discovery-timeout-seconds",
-            "discovery_timeout",
-            "discovery-timeout",
-        ),
-        description="Timeout applied to tool discovery requests in seconds",
-        ge=1,
-        le=60,
-    )
     require_approval: Optional[Union[Literal["always", "never"], Dict[str, Any]]] = Field(
         default=None,
         validation_alias=AliasChoices("require_approval", "require-approval"),
@@ -247,18 +230,8 @@ class HostedMCPServer(BaseModel):
             raise ValueError(
                 "Hosted MCP server requires either server_url or connector_id to be configured"
             )
-        if self.discovery_url and not self.server_url:
-            raise ValueError(
-                "Hosted MCP discovery requires server_url to be configured"
-            )
         return self
 
-    @field_validator("discovery_timeout_seconds", mode="before")
-    @classmethod
-    def _parse_discovery_timeout(cls, value: Any) -> int | None:
-        if value is None:
-            return None
-        return _parse_duration_seconds(value, field="discovery_timeout")
 
     def to_mcp_config(self, *, allowed_tools: Optional[List[str]] = None) -> Dict[str, Any]:
         """Build a Hosted MCP tool configuration dictionary."""

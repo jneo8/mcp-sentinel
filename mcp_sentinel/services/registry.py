@@ -14,7 +14,6 @@ from agents.tool import MCPToolApprovalFunction
 from loguru import logger
 
 from ..models import HostedMCPServer
-from .discovery import HostedMCPDiscoveryClient
 
 
 @dataclass
@@ -59,12 +58,8 @@ class ToolRegistry:
         servers: Sequence[HostedMCPServer],
         *,
         approval_callback: MCPToolApprovalFunction | None = None,
-        discovery_client: HostedMCPDiscoveryClient | None = None,
     ) -> None:
         self._servers: Dict[str, HostedMCPServer] = {server.name: server for server in servers}
-        self._approval_callback = approval_callback
-        self._discovery = discovery_client or HostedMCPDiscoveryClient()
-        self._discovered_cache: Dict[str, List[str]] = {}
 
     @classmethod
     def from_settings(
@@ -72,14 +67,12 @@ class ToolRegistry:
         settings: "SentinelSettings",
         *,
         approval_callback: MCPToolApprovalFunction | None = None,
-        discovery_client: HostedMCPDiscoveryClient | None = None,
     ) -> "ToolRegistry":
         """Convenience constructor feeding hosted MCP servers from settings."""
 
         return cls(
             settings.mcp_servers,
             approval_callback=approval_callback,
-            discovery_client=discovery_client,
         )
 
     def resolve(self, tool_identifiers: Sequence[str]) -> List[Tool]:
@@ -146,65 +139,19 @@ class ToolRegistry:
     ) -> List[str] | None:
         explicit = grouped.explicit
 
-        discovered = self._get_discovered_tools(server)
-        discovered_set = set(discovered)
-
         if grouped.wildcard:
-            if discovered:
-                return discovered
             if server.default_allowed_tools:
                 return list(dict.fromkeys(server.default_allowed_tools))
             # None signals to use server defaults
-            logger.warning(
-                "Wildcard request but no discovery data; falling back to unrestricted access",
-                server=server.name,
-            )
             return None
 
         if not explicit:
-            if discovered:
-                return discovered
             if server.default_allowed_tools:
                 return list(dict.fromkeys(server.default_allowed_tools))
             return None
 
-        if discovered:
-            missing = sorted(explicit - discovered_set)
-            if missing:
-                logger.warning(
-                    "Requested tools not advertised by server",
-                    server=server.name,
-                    requested=missing,
-                )
-            filtered = sorted(explicit & discovered_set)
-            if filtered:
-                return filtered
-            logger.warning(
-                "Using explicit tool list despite discovery miss",
-                server=server.name,
-                requested=sorted(explicit),
-            )
-            return sorted(explicit)
-
         return sorted(explicit)
 
-    def _get_discovered_tools(self, server: HostedMCPServer) -> List[str]:
-        if server.name in self._discovered_cache:
-            return self._discovered_cache[server.name]
-
-        try:
-            discovered = self._discovery.discover(server)
-        except Exception as exc:  # noqa: BLE001 - discovery should not break resolution
-            logger.warning(
-                "Hosted MCP discovery failed",
-                server=server.name,
-                error=str(exc),
-            )
-            discovered = []
-
-        unique_discovered = list(dict.fromkeys(discovered))
-        self._discovered_cache[server.name] = unique_discovered
-        return unique_discovered
 
 
 __all__ = ["ToolRegistry"]
