@@ -62,35 +62,12 @@ class HostedMCPDiscoveryClient:
 
     def discover(self, server: HostedMCPServer) -> List[str]:
         configured = server.default_allowed_tools or []
-        discovery_url = _build_discovery_url(server)
-        if not discovery_url:
-            return list(dict.fromkeys(configured))
-
-        timeout = server.discovery_timeout_seconds or 5
-        try:
-            client = self.http_client_factory() if self.http_client_factory else httpx.Client()
-            with client:
-                response = client.get(discovery_url, timeout=timeout)
-                response.raise_for_status()
-                payload = response.json()
-        except Exception as exc:  # noqa: BLE001 - discovery failures should be non-fatal
-            logger.warning(
-                "Hosted MCP discovery request failed",
-                server=server.name,
-                discovery_url=discovery_url,
-                error=str(exc),
-            )
-            return list(dict.fromkeys(configured))
-
-        discovered = _extract_names(payload)
-        if not discovered and not configured:
-            logger.warning(
-                "Hosted MCP discovery returned no tool names",
-                server=server.name,
-                discovery_url=discovery_url,
-            )
-
-        return _merge_unique(discovered, configured)
+        logger.info(
+            "Using configured tools directly, skipping discovery",
+            server=server.name,
+            tools=configured,
+        )
+        return list(dict.fromkeys(configured))
 
 
 __all__ = ["HostedMCPDiscoveryClient"]

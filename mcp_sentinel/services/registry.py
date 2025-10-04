@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Set
+from typing import Any, Dict, List, Sequence, Set
 
-from agents.tool import HostedMCPTool, MCPToolApprovalFunction, Tool
+import httpx
+from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
+from agents.tool import MCPToolApprovalFunction
 from loguru import logger
 
 from ..models import HostedMCPServer
@@ -17,6 +21,34 @@ from .discovery import HostedMCPDiscoveryClient
 class _GroupedTools:
     explicit: Set[str]
     wildcard: bool = False
+
+
+def create_mcp_server(server_config: HostedMCPServer) -> MCPServerStreamableHttp:
+    """Create an MCP server using the OpenAI Agents framework."""
+
+    params = MCPServerStreamableHttpParams(
+        url=server_config.server_url,
+        timeout=30.0
+    )
+
+    # Add headers if configured
+    if server_config.headers:
+        params["headers"] = server_config.headers
+
+    mcp_server = MCPServerStreamableHttp(
+        params=params,
+        name=server_config.name,
+        cache_tools_list=True,
+        client_session_timeout_seconds=30.0
+    )
+
+    logger.info(
+        "Created MCP server",
+        name=server_config.name,
+        url=server_config.server_url
+    )
+
+    return mcp_server
 
 
 class ToolRegistry:
@@ -100,13 +132,12 @@ class ToolRegistry:
                 )
                 continue
 
-            tool_config = server_config.to_mcp_config(
-                allowed_tools=sorted(allowed_tools) if allowed_tools else None
-            )
-            hosted_tool = HostedMCPTool(
-                tool_config=tool_config, on_approval_request=self._approval_callback
-            )
-            resolved.append(hosted_tool)
+            # Create MCP server for the OpenAI Agents framework
+            mcp_server = create_mcp_server(server_config)
+
+            # Return the MCP server instead of individual tools
+            # Note: The Agent will need to be configured with mcp_servers instead of tools
+            resolved.append(mcp_server)
 
         return resolved
 

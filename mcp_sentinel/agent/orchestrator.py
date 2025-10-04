@@ -93,11 +93,38 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
     ) -> None:
         instructions = self._render_instructions(card, notification)
         self._sinks.emit(card.sinks, incident_start_event(card, notification))
-        tools = self._tool_resolver.resolve(card.tools)
+        resolved_items = self._tool_resolver.resolve(card.tools)
+
+        # Separate tools and MCP servers
+        tools = []
+        mcp_servers = []
+        for item in resolved_items:
+            if hasattr(item, 'name') and hasattr(item, 'description'):  # Regular Tool
+                tools.append(item)
+            else:  # MCPServer
+                mcp_servers.append(item)
+
+        # Initialize MCP server connections
+        for mcp_server in mcp_servers:
+            try:
+                await mcp_server.connect()
+                logger.info(
+                    "Connected to MCP server",
+                    server_name=mcp_server.name,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to connect to MCP server",
+                    server_name=mcp_server.name,
+                    error=str(exc),
+                )
+                raise
+
         agent = Agent(
             name=f"{card.name}-agent",
             instructions=instructions,
             tools=tools,
+            mcp_servers=mcp_servers,
             model=card.model or self._settings.openai.model,
         )
 
@@ -115,6 +142,8 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
             card=card.name,
             resource=notification.resource.name,
             model=agent.model,
+            initial_input=initial_input,
+            instructions_preview=instructions[:200],
         )
 
         try:
@@ -136,6 +165,18 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
 
         self._emit_success_event(card, notification, result)
         self._log_result(card, notification, result)
+
+        # Clean up MCP server connections
+        for mcp_server in mcp_servers:
+            try:
+                await mcp_server.cleanup()
+                logger.debug("Cleaned up MCP server", server_name=mcp_server.name)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to cleanup MCP server",
+                    server_name=mcp_server.name,
+                    error=str(exc),
+                )
 
     def _render_instructions(
         self, card: IncidentCard, notification: IncidentNotification
@@ -173,12 +214,24 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
         result: RunResult,
     ) -> None:
         final_output = getattr(result, "final_output", None)
+        turn_count = getattr(result, "turn_count", None)
+        is_finished = getattr(result, "is_finished", None)
+        status = getattr(result, "status", None)
         preview = shorten(str(final_output), width=240) if final_output is not None else "<none>"
+
+        # Always log the complete final result for visibility
         logger.info(
-            "Agent run completed",
+            f"Agent run completed - Final Output:\n{final_output or '<NO OUTPUT PRODUCED>'}",
+        )
+
+        logger.info(
+            "Agent run metadata",
             card=card.name,
             resource=notification.resource.name,
-            final_output_preview=preview,
+            turn_count=turn_count,
+            is_finished=is_finished,
+            status=status,
+            result_type=type(result).__name__,
         )
 
     def _emit_success_event(

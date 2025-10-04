@@ -20,27 +20,11 @@ class PromptRepository:
     def load(self, prompt_identifier: str) -> str:
         """Return the template string for the provided identifier.
 
-        The identifier is treated as a file path relative to the repository base. If the file does
-        not exist, the identifier itself is returned and a warning is logged so the system can still
-        operate with inline prompts.
+        The identifier is now treated as inline prompt text from the config file.
+        This allows prompts to be defined directly in config.yaml without separate files.
         """
 
-        candidate_path = Path(prompt_identifier)
-        if not candidate_path.is_absolute():
-            candidate_path = self._base_path / candidate_path
-
-        if candidate_path.exists():
-            try:
-                return candidate_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                logger.exception(
-                    "Failed to read prompt template", prompt=str(candidate_path), error=str(exc)
-                )
-
-        logger.warning(
-            "Prompt template not found on disk, using identifier as inline instructions",
-            prompt=prompt_identifier,
-        )
+        # Return the prompt identifier directly as it contains the inline prompt text
         return prompt_identifier
 
 
