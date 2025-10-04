@@ -1,169 +1,57 @@
-# MCP Sentinel Configuration
+# MCP Sentinel Configuration - Example
 debug: true
 log-level: debug
 
 # MCP Servers - External services for incident response
 mcp-servers:
-  - name: mcp-juju
-    type: stdio
-    command: "./mcp-juju"
-    args: ["--tool-names", "controllers,models,status,exec,run"]
-    timeout: "60s"
-    auto-start: true
-    tools:
-      - controllers
-      - models
-      - status
-      - exec
-      - run
+  - name: k8s-mcp
+    server-url: "http://localhost:8080/mcp"
+    default-allowed-tools:
+      - pods_get
+      - pods_list
+      - namespaces_list
+      - events_list
 
 # Resources - Single source of truth
 resources:
-  - name: ceph-pgs-unclean
+  - name: kube-pod-not-ready
     type: prometheus_alert
     filters:
-      alertname: "CephPGsUnclean"
-  - name: ceph-osd-down-high
-    type: prometheus_alert
-    filters:
-      alertname: "CephOSDDownHigh"
+      alertname: "KubePodNotReady"
 
 # Watchers - Produce notifications for specific resources
 watchers:
   - type: prometheus
     name: cos-prometheus
-    endpoint: "http://PROMETHEUS_ENDPOINT/cos-prometheus-0"
+    endpoint: "http://YOUR_PROMETHEUS_HOST/api/v1"
     poll-interval: "5s"
     resources:
-      - ceph-pgs-unclean
-      - ceph-osd-down-high
+      - kube-pod-not-ready
 
 # Incident Cards - Listen to specific resources
 incident-cards:
-  - name: ceph-pg-unclean-alert
-    resource: ceph-pgs-unclean
-    max-iterations: 10
+  - name: kube-pod-not-ready-alert
+    resource: kube-pod-not-ready
+    max-iterations: 12
     prompt: |
-      CEPH PG UNCLEAN ALERT - MICROCEPH DEPLOYMENT:
-      Alert: {{.Name}}
-      Instance: {{.Labels.instance}}
-      Juju Application: {{.Labels.juju_application}}
-      Juju Model: {{.Labels.juju_model}}
-      Value: {{.Value}}
+      KUBEPODNOTREADY ALERT INVESTIGATION:
+      Alert: ${resource_name}
+      Resource: ${resource_type}
+      State: ${resource_state}
+      Labels: ${resource_labels}
 
-      CRITICAL: Ceph placement groups are in an unclean state in a MicroCeph deployment!
-      This requires immediate attention to maintain data integrity.
+      GOAL: Confirm pod readiness issues and collect diagnostics via the Kubernetes MCP server.
 
-      DEPLOYMENT CONTEXT:
-      - This is a MicroCeph deployment managed by Juju
-      - Application name: "microceph" (NOT ceph-mon or ceph-osd)
-      - Juju model: {{.Labels.juju_model}}
-      - Affected unit: {{.Labels.juju_unit}}
+      REQUIRED STEPS:
+      1. Use k8s-mcp.namespaces_list to verify cluster connectivity
+      2. Use k8s-mcp.pods_list to list pods in the affected namespace
+      3. Use k8s-mcp.pods_get to get detailed pod information
+      4. Use k8s-mcp.events_list to check for related events
+      5. Summarise why the pod is not ready and recommend next remediation steps.
 
-      INVESTIGATION STEPS:
-      1. First check controllers and models to find the correct workload model
-      2. Use the correct model (-m flag) for all juju commands
-      3. Check juju status to see all microceph units
-      4. Check microceph cluster status on the affected unit
-      5. Investigate specific Ceph placement group issues
-      6. Check OSD status and health
-
-      CRITICAL: USE EXACT VALUES FROM ALERT - NO SUBSTITUTIONS!
-
-      REQUIRED ALERT VALUES:
-      - Model UUID: {{.Labels.juju_model}}
-      - Unit (USE EXACTLY): {{.Labels.juju_unit}}
-      - Application: {{.Labels.juju_application}}
-
-      MANDATORY STEPS (DO NOT DEVIATE):
-      1. mcp-juju.models {"format": "json"} → find model name for UUID {{.Labels.juju_model}}
-      2. mcp-juju.status {"model": "discovered-name", "format": "json"}
-      3. mcp-juju.exec {"model": "discovered-name", "unit": "{{.Labels.juju_unit}}", "args": ["sudo", "microceph.ceph", "status"]}
-      4. mcp-juju.exec {"model": "discovered-name", "unit": "{{.Labels.juju_unit}}", "args": ["sudo", "microceph.ceph", "pg", "dump"]}
-
-      UNIT MUST BE: {{.Labels.juju_unit}} (NOT microceph/0)
-
-
-      Available MCP Tools:
-      - mcp-juju.controllers: List juju controllers
-      - mcp-juju.models: List juju models
-      - mcp-juju.status: Check juju application and unit status (use model parameter)
-      - mcp-juju.exec: Execute commands on juju units (use model parameter)
-      - mcp-juju.run: Run juju actions on units (use model parameter)
-
-      Timestamp: {{.Timestamp}}
+      Return a concise summary covering pod phase, container statuses, and suggested actions.
     tools:
-      - mcp-juju.controllers
-      - mcp-juju.models
-      - mcp-juju.status
-      - mcp-juju.exec
-      - mcp-juju.run
-
-  - name: ceph-osd-down-high-alert
-    resource: ceph-osd-down-high
-    max-iterations: 20
-    prompt: |
-      CEPH OSD DOWN HIGH ALERT - MICROCEPH DEPLOYMENT:
-      Alert: {{.Name}}
-      Instance: {{.Labels.instance}}
-      Juju Application: {{.Labels.juju_application}}
-      Juju Model: {{.Labels.juju_model}}
-      Value: {{.Value}}
-
-      CRITICAL: Multiple Ceph OSDs are down in a MicroCeph deployment!
-      This is a severe issue that can lead to data loss and cluster failure.
-
-      DEPLOYMENT CONTEXT:
-      - This is a MicroCeph deployment managed by Juju
-      - Application name: "microceph" (NOT ceph-mon or ceph-osd)
-      - Juju model: {{.Labels.juju_model}}
-      - Affected unit: {{.Labels.juju_unit}}
-
-      CRITICAL: USE EXACT VALUES FROM ALERT - NO SUBSTITUTIONS!
-
-      REQUIRED ALERT VALUES:
-      - Model UUID: {{.Labels.juju_model}}
-      - Unit (USE EXACTLY): {{.Labels.juju_unit}}
-      - Application: {{.Labels.juju_application}}
-
-      EXECUTION STEPS:
-      1. mcp-juju.models {"format": "json"} → find model name for UUID {{.Labels.juju_model}}
-      2. mcp-juju.status {"model": "discovered-name", "format": "json"}
-      3. Try {{.Labels.juju_unit}} first, if it fails use ANY available microceph unit from status
-      4. mcp-juju.exec {"model": "discovered-name", "unit": "any-working-microceph-unit", "args": ["sudo", "microceph.ceph", "osd", "tree"]}
-      5. mcp-juju.exec {"model": "discovered-name", "unit": "any-working-microceph-unit", "args": ["sudo", "microceph.ceph", "osd", "stat"]}
-
-      GET THE JOB DONE:
-      - Primary goal: Get OSD status information
-      - Use {{.Labels.juju_unit}} if available, otherwise use any microceph unit that works
-      - DO NOT give up if one unit fails - try others from the status output
-
-      REQUIRED OUTPUT FORMAT:
-      You MUST provide a summary in this exact format:
-
-      ### OSD STATUS REPORT
-      **Down OSDs:** [List specific OSD IDs that are down]
-      **Total OSDs:** [Total number of OSDs in cluster]
-      **Impact:** [Data redundancy impact - critical/warning/ok]
-      **Failed Commands:** [If any commands failed, list them]
-
-      INVESTIGATION FOCUS:
-      - Execute ceph osd tree and osd stat commands
-      - Parse output to identify DOWN OSDs by ID number
-      - Report specific OSD numbers (e.g., osd.0, osd.1, osd.2)
-      - If commands fail, try alternative units from status output
-
-      Available MCP Tools:
-      - mcp-juju.controllers: List juju controllers
-      - mcp-juju.models: List juju models
-      - mcp-juju.status: Check juju application and unit status (use model parameter)
-      - mcp-juju.exec: Execute commands on juju units (use model parameter)
-      - mcp-juju.run: Run juju actions on units (use model parameter)
-
-      Timestamp: {{.Timestamp}}
-    tools:
-      - mcp-juju.controllers
-      - mcp-juju.models
-      - mcp-juju.status
-      - mcp-juju.exec
-      - mcp-juju.run
+      - k8s-mcp.pods_get
+      - k8s-mcp.pods_list
+      - k8s-mcp.namespaces_list
+      - k8s-mcp.events_list
