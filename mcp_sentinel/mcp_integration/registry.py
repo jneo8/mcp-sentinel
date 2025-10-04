@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence, Set
+from typing import Dict, List, Sequence, Set
 
-import httpx
-from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
+from agents.mcp import MCPServer, MCPServerStreamableHttp, MCPServerStreamableHttpParams
 from agents.tool import MCPToolApprovalFunction
 from loguru import logger
 
-from ..models import HostedMCPServer
+from ..models import HostedMCPServer, SentinelSettings
 
 
 @dataclass
@@ -32,6 +29,9 @@ def create_mcp_server(server_config: HostedMCPServer) -> MCPServerStreamableHttp
         default_tools=server_config.default_allowed_tools,
         headers_configured=bool(server_config.headers),
     )
+
+    if not server_config.server_url:
+        raise ValueError(f"Server {server_config.name} requires server_url to be configured")
 
     params = MCPServerStreamableHttpParams(
         url=server_config.server_url,
@@ -97,7 +97,7 @@ class MCPServerRegistry:
             approval_callback=approval_callback,
         )
 
-    def resolve(self, tool_identifiers: Sequence[str]) -> List[Tool]:
+    def resolve(self, tool_identifiers: Sequence[str]) -> List[MCPServer]:
         """Return the list of MCP servers applicable for the provided tool identifiers.
 
         Tool identifiers must use the ``server.tool`` format. Identifiers referencing unknown
@@ -177,7 +177,7 @@ class MCPServerRegistry:
             }
         )
 
-        resolved: List[Tool] = []
+        resolved: List[MCPServer] = []
         for server_name, grouped_tools in grouped.items():
             logger.debug(
                 "Processing server for tool resolution",

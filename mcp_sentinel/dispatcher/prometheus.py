@@ -12,7 +12,6 @@ from ..models import (
     DispatcherResult,
     IncidentCard,
     IncidentNotification,
-    PrometheusDispatcherSettings,
     SentinelSettings,
 )
 from ..interfaces import AgentOrchestrator

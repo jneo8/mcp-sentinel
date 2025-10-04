@@ -1,6 +1,5 @@
 from typing import List
 
-import pytest
 
 from mcp_sentinel.models import HostedMCPServer
 from mcp_sentinel.mcp_integration import MCPServerRegistry

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any, Dict
 
 import click
 from loguru import logger

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 from textwrap import shorten
-from typing import Any, List, Protocol, Sequence
+from typing import Any, List, Protocol
 
 from agents import Agent, Runner
+from agents.mcp import MCPServer
 from agents.result import RunResult
 from agents.run import RunConfig
-from agents.tool import Tool
 from loguru import logger
 
 from ..interfaces import AgentOrchestrator
@@ -86,31 +86,13 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
         logger.debug("Resolving MCP tools from card configuration", tools=card.tools)
         resolved_items = self._mcp_registry.resolve(card.tools)
 
-        # Separate tools and MCP servers
-        tools = []
-        mcp_servers = []
+        # All resolved items are MCP servers
+        tools: List[Any] = []
+        mcp_servers: List[MCPServer] = resolved_items
         logger.debug(
-            "Separating resolved items into tools and MCP servers",
-            total_resolved_items=len(resolved_items),
+            "Using resolved MCP servers",
+            total_mcp_servers=len(mcp_servers),
         )
-
-        for item in resolved_items:
-            if hasattr(item, 'name') and hasattr(item, 'description'):  # Regular Tool
-                logger.debug(
-                    "Found regular tool in resolved items",
-                    tool_name=getattr(item, 'name', 'unknown'),
-                    tool_type=type(item).__name__,
-                    has_description=hasattr(item, 'description')
-                )
-                tools.append(item)
-            else:  # MCPServer
-                logger.debug(
-                    "Found MCP server in resolved items",
-                    server_name=getattr(item, 'name', 'unknown'),
-                    server_type=type(item).__name__,
-                    server_url=getattr(getattr(item, 'params', None), 'url', 'unknown')
-                )
-                mcp_servers.append(item)
 
         logger.debug(
             "Tool/server separation completed",
@@ -125,8 +107,7 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
             logger.debug(
                 "Attempting to connect to MCP server",
                 server_name=mcp_server.name,
-                server_url=getattr(mcp_server.params, 'url', 'unknown'),
-                server_timeout=getattr(mcp_server.params, 'timeout', 'unknown'),
+                server_type=type(mcp_server).__name__,
                 cache_enabled=getattr(mcp_server, 'cache_tools_list', 'unknown'),
             )
             try:
@@ -138,14 +119,14 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
                 logger.debug(
                     "MCP server connection established successfully",
                     server_name=mcp_server.name,
-                    server_url=getattr(mcp_server.params, 'url', 'unknown'),
+                    server_type=type(mcp_server).__name__,
                     connection_status="connected",
                 )
             except Exception as exc:
                 logger.error(
                     "Failed to connect to MCP server",
                     server_name=mcp_server.name,
-                    server_url=getattr(mcp_server.params, 'url', 'unknown'),
+                    server_type=type(mcp_server).__name__,
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
@@ -342,7 +323,6 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
         turn_count = getattr(result, "turn_count", None)
         is_finished = getattr(result, "is_finished", None)
         status = getattr(result, "status", None)
-        preview = shorten(str(final_output), width=240) if final_output is not None else "<none>"
 
         # Always log the complete final result for visibility
         logger.info(
