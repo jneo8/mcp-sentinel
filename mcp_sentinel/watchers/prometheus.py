@@ -250,8 +250,13 @@ class PrometheusWatcherService:
     async def stop(self) -> None:
         for watcher in self._watchers:
             await watcher.stop()
-        if self._owns_client:
+        try:
             await self._client.aclose()
+        except Exception as exc:  # noqa: BLE001 - ensure shutdown continues
+            logger.warning(
+                "Failed to close Prometheus watcher HTTP client",
+                error=str(exc),
+            )
 
     async def poll_once(self) -> int:
         """Trigger a single poll across all configured watchers (useful for tests)."""

@@ -14,6 +14,7 @@ from mcp_sentinel.models import (
     Resource,
     SentinelSettings,
 )
+from mcp_sentinel.sinks import SinkEvent
 from mcp_sentinel.prompts import PromptRepository
 
 
@@ -24,6 +25,14 @@ class StubRunner:
     async def run(self, starting_agent, input, **kwargs):  # noqa: ANN002, ANN003
         self.calls.append({"agent": starting_agent, "input": input, "kwargs": kwargs})
         return SimpleNamespace(final_output="incident resolved")
+
+
+class RecordingSinkDispatcher:
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    def emit(self, sink_names, event):  # noqa: ANN001 - test helper
+        self.calls.append({"sinks": list(sink_names), "event": event})
 
 
 @pytest.mark.asyncio
@@ -100,3 +109,68 @@ async def test_agent_orchestrator_resolves_hosted_mcp_tools() -> None:
     assert tool.tool_config["server_label"] == "mcp-juju"
     assert tool.tool_config["server_url"] == "https://mcp.juju.example"
     assert tool.tool_config["allowed_tools"] == ["controllers", "exec"]
+
+
+@pytest.mark.asyncio
+async def test_agent_orchestrator_emits_sink_events_on_success() -> None:
+    settings = SentinelSettings()
+    card = IncidentCard(
+        name="latency",
+        resource="web-tier",
+        prompt_template="Investigate",
+        sinks=["audit"],
+    )
+    notification = IncidentNotification(
+        resource=Resource(type="prometheus_alert", name="web-tier"),
+    )
+
+    runner = StubRunner()
+    sink_dispatcher = RecordingSinkDispatcher()
+    orchestrator = OpenAIAgentOrchestrator(
+        settings,
+        runner=runner,
+        sink_dispatcher=sink_dispatcher,
+    )
+
+    await orchestrator.run_incident(card, notification)
+
+    assert len(sink_dispatcher.calls) == 2
+    first, second = sink_dispatcher.calls
+    assert first["sinks"] == ["audit"]
+    assert isinstance(first["event"], SinkEvent)
+    assert first["event"].type == "incident.started"
+    assert second["event"].type == "incident.success"
+
+
+class FailingRunner:
+    async def run(self, *args, **kwargs):  # noqa: ANN002, ANN003 - test helper
+        raise RuntimeError("runner boom")
+
+
+@pytest.mark.asyncio
+async def test_agent_orchestrator_emits_failure_sink_event() -> None:
+    settings = SentinelSettings()
+    card = IncidentCard(
+        name="latency",
+        resource="web-tier",
+        prompt_template="Investigate",
+        sinks=["audit"],
+    )
+    notification = IncidentNotification(
+        resource=Resource(type="prometheus_alert", name="web-tier"),
+    )
+
+    sink_dispatcher = RecordingSinkDispatcher()
+    orchestrator = OpenAIAgentOrchestrator(
+        settings,
+        runner=FailingRunner(),
+        sink_dispatcher=sink_dispatcher,
+    )
+
+    with pytest.raises(RuntimeError):
+        await orchestrator.run_incident(card, notification)
+
+    assert len(sink_dispatcher.calls) == 2
+    start, failure = sink_dispatcher.calls
+    assert start["event"].type == "incident.started"
+    assert failure["event"].type == "incident.failure"

@@ -16,6 +16,11 @@ from ..interfaces import AgentOrchestrator
 from ..models import IncidentCard, IncidentNotification, SentinelSettings
 from ..prompts import PromptRenderer, PromptRepository
 from ..services import ToolRegistry
+from ..sinks import (
+    SinkDispatcher,
+    incident_completion_event,
+    incident_start_event,
+)
 
 
 class RunnerProtocol(Protocol):
@@ -52,7 +57,13 @@ class ToolResolver:
                 tools=list(tool_identifiers),
             )
             return []
-        return self._registry.resolve(tool_identifiers)
+        resolved = self._registry.resolve(tool_identifiers)
+        if not resolved:
+            logger.warning(
+                "No tools resolved for incident card",
+                tools=list(tool_identifiers),
+            )
+        return resolved
 
 
 class OpenAIAgentOrchestrator(AgentOrchestrator):
@@ -67,6 +78,7 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
         runner: RunnerProtocol | None = None,
         tool_resolver: ToolResolver | None = None,
         tool_registry: ToolRegistry | None = None,
+        sink_dispatcher: SinkDispatcher | None = None,
     ) -> None:
         self._settings = settings
         self._prompts = prompt_repository or PromptRepository()
@@ -74,11 +86,13 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
         self._runner = runner or Runner
         registry = tool_registry or ToolRegistry.from_settings(settings)
         self._tool_resolver = tool_resolver or ToolResolver(registry)
+        self._sinks = sink_dispatcher or SinkDispatcher.from_settings(settings)
 
     async def run_incident(
         self, card: IncidentCard, notification: IncidentNotification
     ) -> None:
         instructions = self._render_instructions(card, notification)
+        self._sinks.emit(card.sinks, incident_start_event(card, notification))
         tools = self._tool_resolver.resolve(card.tools)
         agent = Agent(
             name=f"{card.name}-agent",
@@ -111,6 +125,7 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
                 run_config=run_config,
             )
         except Exception as exc:  # noqa: BLE001
+            self._emit_failure_event(card, notification, exc)
             logger.exception(
                 "Agent run failed",
                 card=card.name,
@@ -119,6 +134,7 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
             )
             raise
 
+        self._emit_success_event(card, notification, result)
         self._log_result(card, notification, result)
 
     def _render_instructions(
@@ -164,3 +180,36 @@ class OpenAIAgentOrchestrator(AgentOrchestrator):
             resource=notification.resource.name,
             final_output_preview=preview,
         )
+
+    def _emit_success_event(
+        self,
+        card: IncidentCard,
+        notification: IncidentNotification,
+        result: RunResult,
+    ) -> None:
+        payload = {
+            "final_output": getattr(result, "final_output", None),
+            "turn_count": getattr(result, "turn_count", None),
+        }
+        event = incident_completion_event(
+            card,
+            notification,
+            outcome="success",
+            result_payload=payload,
+        )
+        self._sinks.emit(card.sinks, event)
+
+    def _emit_failure_event(
+        self,
+        card: IncidentCard,
+        notification: IncidentNotification,
+        error: Exception,
+    ) -> None:
+        payload = {"error": str(error)}
+        event = incident_completion_event(
+            card,
+            notification,
+            outcome="failure",
+            result_payload=payload,
+        )
+        self._sinks.emit(card.sinks, event)
