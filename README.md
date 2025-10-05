@@ -37,7 +37,9 @@ flowchart TD
 
 ## Getting Started
 
-See [Getting Started Guide](docs/tutorial/getting-started.md) for a complete hands-on tutorial.
+**Tutorials:**
+- [Getting Started Guide](docs/tutorial/getting-started.md) - Complete hands-on tutorial
+- [Ceph OSD Troubleshooting](docs/tutorial/ceph-osd-troubleshooting.md) - Real-world example using Juju and Ceph
 
 ## License
 
