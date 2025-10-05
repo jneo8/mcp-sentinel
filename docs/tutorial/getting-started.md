@@ -2,6 +2,12 @@
 
 In this tutorial, you'll learn how to use MCP Sentinel by setting up automated incident response for Kubernetes pod alerts. By the end, you'll have MCP Sentinel automatically detecting and investigating pod readiness issues.
 
+## Video Walkthrough
+
+Watch this complete demonstration of the tutorial steps:
+
+[![asciicast](https://asciinema.org/a/746726.svg)](https://asciinema.org/a/746726)
+
 ## What you'll build
 
 You'll create a complete incident response system that:

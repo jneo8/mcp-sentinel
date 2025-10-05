@@ -2,6 +2,12 @@
 
 In this tutorial, you'll learn how to use MCP Sentinel to automatically investigate Ceph storage issues. By the end, you'll have MCP Sentinel detecting OSD failures and using Juju to gather diagnostic information.
 
+## Video Walkthrough
+
+Watch this complete demonstration of the tutorial steps:
+
+[![asciicast](https://asciinema.org/a/746727.svg)](https://asciinema.org/a/746727)
+
 ## What you'll build
 
 You'll create an automated incident response system that:
