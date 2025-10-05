@@ -115,6 +115,66 @@ def ceph_osd_df(unit: str = "ceph-mon/0") -> str:
 
 
 @mcp.tool()
+def juju_status(application: str = "") -> str:
+    """Get Juju status for applications and units.
+
+    Args:
+        application: Optional application name to filter status (e.g., 'ceph-mon', 'ceph-osd')
+                    If empty, returns status for all applications
+
+    Returns:
+        Juju status output showing applications, units, and their states
+    """
+    logger.info(f"Tool called: juju_status with application={application}")
+    try:
+        if application:
+            status = juju.status(application)
+        else:
+            status = juju.status()
+
+        logger.info(f"Juju status retrieved successfully")
+        return f"Juju Status:\n{status}"
+    except Exception as e:
+        logger.error(f"Error getting Juju status: {e}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def juju_units(application: str) -> str:
+    """Get list of unit names for a given Juju application.
+
+    Args:
+        application: Application name (e.g., 'ceph-mon', 'ceph-osd', 'microceph')
+
+    Returns:
+        List of unit names for the application (e.g., ['ceph-mon/0', 'ceph-mon/1'])
+    """
+    logger.info(f"Tool called: juju_units with application={application}")
+    try:
+        status_output = juju.status(application)
+
+        # Parse unit names from status output
+        # Status output contains lines like "  ceph-mon/0*  active    idle   10  10.100.100.10"
+        units = []
+        for line in status_output.split('\n'):
+            line = line.strip()
+            # Look for lines that start with the application name followed by /
+            if line.startswith(f"{application}/"):
+                # Extract unit name (first column)
+                unit_name = line.split()[0].rstrip('*')
+                units.append(unit_name)
+
+        logger.info(f"Found {len(units)} units for application {application}")
+        if units:
+            return f"Units for application '{application}':\n" + "\n".join(f"- {unit}" for unit in units)
+        else:
+            return f"No units found for application '{application}'"
+    except Exception as e:
+        logger.error(f"Error getting units for {application}: {e}")
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
 def juju_exec(unit: str, command: str) -> str:
     """Execute arbitrary command on a Juju unit.
 
